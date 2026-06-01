@@ -85,59 +85,79 @@ def event_from_fixture(fx):
     fixture = fx.get('fixture', {})
     league = fx.get('league', {})
     teams = fx.get('teams', {})
-    goals = fx.get('goals', {}) or {}
-    score = fx.get('score', {}) or {}
-    status = fixture.get('status', {}) or {}
-    home = teams.get('home', {}) or {}
-    away = teams.get('away', {}) or {}
-    home_name, away_name = zh_team(home.get('name')), zh_team(away.get('name'))
-    elapsed_status = status.get('short') or 'NS'
-    status_cn = STATUS_ZH.get(elapsed_status, status.get('long') or elapsed_status)
-    start = dt_utc(fixture.get('date'))
-    if not start:
-        return None
-    end = start.replace(hour=start.hour+2) if start.hour <= 21 else start
-    # safer duration handling
-    from datetime import timedelta
-    end = start + timedelta(hours=2)
-    gh, ga = goals.get('home'), goals.get('away')
-    finished = elapsed_status in {'FT','AET','PEN'} or (gh is not None and ga is not None and elapsed_status not in {'NS','TBD','PST'})
-    if finished:
-        summary = f'{TITLE_PREFIX}：{home_name} {gh}-{ga} {away_name}'
-    else:
-        summary = f'{TITLE_PREFIX}：{home_name} vs {away_name}'
-    venue = fixture.get('venue', {}) or {}
-    venue_txt = zh_venue(venue.get('name'))
-    city = venue.get('city') or ''
-    location = '，'.join([x for x in [venue_txt, city] if x])
-    lines = [
-        f'赛事：2026年美加墨世界杯',
-        f'阶段：{league.get("round") or "待定"}',
-        f'状态：{status_cn}',
-        f'对阵：{home_name} vs {away_name}',
-    ]
-    if finished:
-        lines.append(f'比分：{home_name} {gh}-{ga} {away_name}')
-        pen_home = score.get('penalty', {}).get('home') if isinstance(score.get('penalty'), dict) else None
-        pen_away = score.get('penalty', {}).get('away') if isinstance(score.get('penalty'), dict) else None
-        if pen_home is not None and pen_away is not None:
-            lines.append(f'点球：{pen_home}-{pen_away}')
-    lines.append('说明：本日历源每日自动更新；实际显示时间取决于你的日历客户端刷新频率。')
-    uid = stable_uid(fx)
-    now = datetime.now(timezone.utc)
-description = "\n".join(lines)
+    goals = fx.get('goals', {})
+    score = fx.get('score', {})
 
-return [
-    'BEGIN:VEVENT',
-    f'UID:{esc(uid)}',
-    f'DTSTAMP:{fmt_dt(now)}',
-    f'DTSTART:{fmt_dt(start)}',
-    f'DTEND:{fmt_dt(end)}',
-    f'SUMMARY:{esc(summary)}',
-    f'LOCATION:{esc(location)}',
-    f'DESCRIPTION:{esc(description)}',
-    'END:VEVENT'
-]
+    fixture_id = str(fixture.get('id') or stable_uid(fx))
+    uid = f'worldcup2026-match-{fixture_id}@worldcup-cn-calendar'
+
+    raw_date = fixture.get('date')
+    if raw_date:
+        start = datetime.fromisoformat(raw_date.replace('Z', '+00:00'))
+    else:
+        start = datetime(2026, 6, 11, 19, 0, tzinfo=timezone.utc)
+
+    end = start + timedelta(hours=2)
+
+    home_raw = teams.get('home', {}).get('name') or '待定球队'
+    away_raw = teams.get('away', {}).get('name') or '待定球队'
+    home = zh_team(home_raw)
+    away = zh_team(away_raw)
+
+    venue_raw = fixture.get('venue', {}).get('name') or ''
+    venue_city = fixture.get('venue', {}).get('city') or ''
+    venue = zh_venue(venue_raw)
+    location = venue
+    if venue_city:
+        location = f'{venue}，{venue_city}'
+
+    status = fixture.get('status', {}).get('short') or ''
+    status_long = fixture.get('status', {}).get('long') or ''
+
+    home_goals = goals.get('home')
+    away_goals = goals.get('away')
+
+    is_finished = status in ['FT', 'AET', 'PEN']
+    if is_finished and home_goals is not None and away_goals is not None:
+        summary = f'世界杯：{home} {home_goals}-{away_goals} {away}'
+    else:
+        summary = f'世界杯：{home} vs {away}'
+
+    round_name = league.get('round') or '世界杯比赛'
+
+    lines = [
+        f'赛事：2026 美加墨世界杯',
+        f'阶段：{round_name}',
+        f'状态：{zh_status(status, status_long)}',
+        f'主队：{home}',
+        f'客队：{away}',
+        f'球场：{location}',
+    ]
+
+    if is_finished and home_goals is not None and away_goals is not None:
+        lines.append(f'比分：{home} {home_goals}-{away_goals} {away}')
+
+    pen_home = score.get('penalty', {}).get('home')
+    pen_away = score.get('penalty', {}).get('away')
+    if pen_home is not None and pen_away is not None:
+        lines.append(f'点球：{home} {pen_home}-{pen_away} {away}')
+
+    lines.append('说明：本日历源每日北京时间 9 点自动更新；实际显示时间取决于你的日历客户端刷新频率。')
+
+    now = datetime.now(timezone.utc)
+    description = "\n".join(lines)
+
+    return [
+        'BEGIN:VEVENT',
+        f'UID:{esc(uid)}',
+        f'DTSTAMP:{fmt_dt(now)}',
+        f'DTSTART:{fmt_dt(start)}',
+        f'DTEND:{fmt_dt(end)}',
+        f'SUMMARY:{esc(summary)}',
+        f'LOCATION:{esc(location)}',
+        f'DESCRIPTION:{esc(description)}',
+        'END:VEVENT'
+    ]
 
 def build():
     fixtures = fetch_fixtures()
