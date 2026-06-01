@@ -1,117 +1,183 @@
 import os
-import json
+import re
 import hashlib
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from datetime import datetime, timezone
 
 import requests
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
 OUT = ROOT / "worldcup2026_cn.ics"
-CACHE = DATA / "fixtures_cache.json"
 
-TEAM_ZH_PATH = DATA / "team_zh_map.json"
-VENUE_ZH_PATH = DATA / "venue_zh_map.json"
+UPSTREAM_ICS_URL = os.getenv("UPSTREAM_ICS_URL", "").strip()
+TITLE_PREFIX = "世界杯"
 
-TEAM_ZH = json.loads(TEAM_ZH_PATH.read_text(encoding="utf-8")) if TEAM_ZH_PATH.exists() else {}
-VENUE_ZH = json.loads(VENUE_ZH_PATH.read_text(encoding="utf-8")) if VENUE_ZH_PATH.exists() else {}
 
-API_KEY = os.getenv("API_FOOTBALL_KEY", "")
-LEAGUE_ID = os.getenv("API_FOOTBALL_LEAGUE_ID", "1")
-SEASON = os.getenv("API_FOOTBALL_SEASON", "2026")
-TIMEZONE_NAME = os.getenv("CALENDAR_TIMEZONE", "Asia/Shanghai")
-TITLE_PREFIX = os.getenv("TITLE_PREFIX", "世界杯")
-
-STATUS_ZH = {
-    "TBD": "待定",
-    "NS": "未开始",
-    "1H": "上半场",
-    "HT": "中场休息",
-    "2H": "下半场",
-    "ET": "加时赛",
-    "BT": "加时中场",
-    "P": "点球大战",
-    "SUSP": "暂停",
-    "INT": "中断",
-    "FT": "已完赛",
-    "AET": "加时完赛",
-    "PEN": "点球完赛",
-    "PST": "已推迟",
-    "CANC": "已取消",
-    "ABD": "已腰斩",
-    "AWD": "判定结果",
-    "WO": "弃权",
-    "LIVE": "进行中",
+TEAM_MAP = {
+    "Mexico": "墨西哥",
+    "South Africa": "南非",
+    "Canada": "加拿大",
+    "United States": "美国",
+    "USA": "美国",
+    "Argentina": "阿根廷",
+    "Brazil": "巴西",
+    "England": "英格兰",
+    "France": "法国",
+    "Germany": "德国",
+    "Spain": "西班牙",
+    "Portugal": "葡萄牙",
+    "Netherlands": "荷兰",
+    "Belgium": "比利时",
+    "Italy": "意大利",
+    "Croatia": "克罗地亚",
+    "Uruguay": "乌拉圭",
+    "Colombia": "哥伦比亚",
+    "Ecuador": "厄瓜多尔",
+    "Japan": "日本",
+    "South Korea": "韩国",
+    "Korea Republic": "韩国",
+    "Australia": "澳大利亚",
+    "Iran": "伊朗",
+    "Saudi Arabia": "沙特阿拉伯",
+    "Qatar": "卡塔尔",
+    "Morocco": "摩洛哥",
+    "Tunisia": "突尼斯",
+    "Egypt": "埃及",
+    "Ghana": "加纳",
+    "Senegal": "塞内加尔",
+    "Algeria": "阿尔及利亚",
+    "Switzerland": "瑞士",
+    "Austria": "奥地利",
+    "Scotland": "苏格兰",
+    "Norway": "挪威",
+    "Sweden": "瑞典",
+    "Türkiye": "土耳其",
+    "Turkey": "土耳其",
+    "New Zealand": "新西兰",
+    "Uzbekistan": "乌兹别克斯坦",
+    "Jordan": "约旦",
+    "Iraq": "伊拉克",
+    "Ivory Coast": "科特迪瓦",
+    "Côte d'Ivoire": "科特迪瓦",
+    "Panama": "巴拿马",
+    "Paraguay": "巴拉圭",
+    "Haiti": "海地",
+    "Curaçao": "库拉索",
+    "Cape Verde": "佛得角",
+    "Czech Republic": "捷克",
+    "DR Congo": "刚果（金）",
+    "Bosnia & Herzegovina": "波黑",
+    "TBD": "待定球队",
+    "TBC": "待定球队",
+    "To be decided": "待定球队",
 }
 
 
-def load_cache():
-    if CACHE.exists():
-        print("使用本地缓存 data/fixtures_cache.json 生成日历。")
-        return json.loads(CACHE.read_text(encoding="utf-8"))
-    print("没有找到本地缓存，生成空日历。")
-    return []
+VENUE_MAP = {
+    "Estadio Azteca": "阿兹特克体育场",
+    "BMO Field": "BMO球场",
+    "BMO Stadium": "BMO球场",
+    "MetLife Stadium": "大都会人寿体育场",
+    "SoFi Stadium": "SoFi体育场",
+    "AT&T Stadium": "AT&T体育场",
+    "Mercedes-Benz Stadium": "梅赛德斯-奔驰体育场",
+    "Hard Rock Stadium": "硬石体育场",
+    "Gillette Stadium": "吉列体育场",
+    "Lincoln Financial Field": "林肯金融球场",
+    "NRG Stadium": "NRG体育场",
+    "Levi's Stadium": "李维斯体育场",
+    "Lumen Field": "流明球场",
+    "BC Place": "BC Place体育场",
+    "Estadio Akron": "阿克伦体育场",
+    "Estadio BBVA": "BBVA体育场",
+    "Arrowhead Stadium": "箭头体育场",
+}
 
 
-def fetch_fixtures():
+def unfold_ics(text):
     """
-    优先调用 API-FOOTBALL。
-    如果免费计划暂不支持 2026，或 API 报错，则自动回退到本地缓存。
+    处理 ICS 折行：以空格或 Tab 开头的行属于上一行。
     """
-    if not API_KEY:
-        print("未配置 API_FOOTBALL_KEY，改用本地缓存。")
-        return load_cache()
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    result = []
 
-    url = "https://v3.football.api-sports.io/fixtures"
-    headers = {"x-apisports-key": API_KEY}
-    params = {
-        "league": LEAGUE_ID,
-        "season": SEASON,
-        "timezone": "UTC",
-    }
+    for line in lines:
+        if line.startswith(" ") or line.startswith("\t"):
+            if result:
+                result[-1] += line[1:]
+        else:
+            result.append(line)
 
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:
-        print(f"API 请求失败，改用本地缓存。原因：{exc}")
-        return load_cache()
-
-    errors = payload.get("errors")
-    if errors:
-        print(f"API 返回错误，改用本地缓存。错误内容：{errors}")
-        return load_cache()
-
-    fixtures = payload.get("response", [])
-    if not fixtures:
-        print("API 返回空赛程，改用本地缓存。")
-        return load_cache()
-
-    CACHE.write_text(json.dumps(fixtures, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"API 获取成功，已更新本地缓存，场次数：{len(fixtures)}")
-    return fixtures
+    return result
 
 
-def esc(value):
+def parse_ics_events(text):
+    lines = unfold_ics(text)
+    events = []
+    current = None
+
+    for line in lines:
+        if line == "BEGIN:VEVENT":
+            current = []
+        elif line == "END:VEVENT":
+            if current is not None:
+                events.append(current)
+            current = None
+        elif current is not None:
+            current.append(line)
+
+    return events
+
+
+def split_prop(line):
     """
-    ICS 字段转义。
+    把 SUMMARY;LANGUAGE=en:xxx 这类属性拆成 key, value。
     """
+    if ":" not in line:
+        return line, ""
+
+    left, value = line.split(":", 1)
+    key = left.split(";", 1)[0].upper()
+    return key, value
+
+
+def get_prop(event, key):
+    key = key.upper()
+
+    for line in event:
+        k, v = split_prop(line)
+        if k == key:
+            return v
+
+    return ""
+
+
+def ics_unescape(value):
+    return (
+        str(value or "")
+        .replace("\\n", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
+    )
+
+
+def ics_escape(value):
     text = str(value or "")
     text = text.replace("\\", "\\\\")
+    text = text.replace("\n", "\\n")
     text = text.replace(";", "\\;")
     text = text.replace(",", "\\,")
-    text = text.replace("\n", "\\n")
     return text
 
 
 def fold(line):
     """
-    ICS 建议单行不要太长；这里做简单折行，兼容常见日历客户端。
+    ICS 建议单行不要太长。这里做简单折行，提升兼容性。
     """
     raw = line.encode("utf-8")
+
     if len(raw) <= 73:
         return line
 
@@ -131,158 +197,175 @@ def fold(line):
     return "\r\n".join(parts)
 
 
-def dt_utc(value):
-    if not value:
-        return None
+def zh_text(text):
+    result = str(text or "")
 
-    value = str(value).replace("Z", "+00:00")
-    return datetime.fromisoformat(value).astimezone(timezone.utc)
+    # 先替换长名称，避免 South Africa 被 South 之类误伤。
+    for en in sorted(TEAM_MAP.keys(), key=len, reverse=True):
+        result = re.sub(rf"\b{re.escape(en)}\b", TEAM_MAP[en], result)
+
+    for en in sorted(VENUE_MAP.keys(), key=len, reverse=True):
+        result = result.replace(en, VENUE_MAP[en])
+
+    replacements = {
+        "FIFA World Cup 2026": "2026年美加墨世界杯",
+        "World Cup 2026": "2026年世界杯",
+        "World Cup": "世界杯",
+        "Group Stage": "小组赛",
+        "Group stage": "小组赛",
+        "Round of 32": "32强赛",
+        "Round of 16": "16强赛",
+        "Quarter-finals": "1/4决赛",
+        "Quarterfinals": "1/4决赛",
+        "Semi-finals": "半决赛",
+        "Semifinals": "半决赛",
+        "Third-place match": "三四名决赛",
+        "Final": "决赛",
+        "Match": "比赛",
+    }
+
+    for old, new in replacements.items():
+        result = result.replace(old, new)
+
+    return result.strip()
 
 
-def fmt_dt(dt):
-    return dt.strftime("%Y%m%dT%H%M%SZ")
+def normalize_summary(summary):
+    """
+    把上游标题改成统一中文标题。
+    尽量保留比分，例如 Mexico 2-1 South Africa。
+    """
+    s = ics_unescape(summary)
+
+    s = re.sub(r"FIFA\s+World\s+Cup\s+2026\s*[:\-–]?\s*", "", s, flags=re.I)
+    s = re.sub(r"World\s+Cup\s+2026\s*[:\-–]?\s*", "", s, flags=re.I)
+    s = re.sub(r"World\s+Cup\s*[:\-–]?\s*", "", s, flags=re.I)
+    s = re.sub(r"Match\s+\d+\s*[:\-–]?\s*", "", s, flags=re.I)
+
+    s = zh_text(s).strip()
+
+    if not s:
+        s = "待定比赛"
+
+    if not s.startswith(TITLE_PREFIX):
+        s = f"{TITLE_PREFIX}：{s}"
+
+    return s
 
 
-def zh_team(name):
-    return TEAM_ZH.get(name or "", name or "待定球队")
+def stable_uid(event):
+    uid = get_prop(event, "UID")
 
+    if uid:
+        return "cn-" + uid
 
-def zh_venue(name):
-    return VENUE_ZH.get(name or "", name or "")
-
-
-def zh_status(short_status, long_status=""):
-    return STATUS_ZH.get(short_status or "", long_status or short_status or "待定")
-
-
-def stable_uid(fx):
-    fixture = fx.get("fixture", {}) if isinstance(fx, dict) else {}
-    fixture_id = fixture.get("id") or fx.get("id")
-
-    if fixture_id:
-        return f"worldcup2026-match-{fixture_id}@worldcup-cn-calendar"
-
-    raw = json.dumps(fx, sort_keys=True, ensure_ascii=False)
+    raw = "\n".join(event)
     digest = hashlib.md5(raw.encode("utf-8")).hexdigest()
-    return f"worldcup2026-match-{digest}@worldcup-cn-calendar"
+    return f"worldcup2026-{digest}@worldcup-cn-calendar"
 
 
-def event_from_fixture(fx):
-    fixture = fx.get("fixture", {})
-    league = fx.get("league", {})
-    teams = fx.get("teams", {})
-    goals = fx.get("goals", {}) or {}
-    score = fx.get("score", {}) or {}
+def convert_event(event):
+    dtstart = get_prop(event, "DTSTART")
+    dtend = get_prop(event, "DTEND")
+    summary = get_prop(event, "SUMMARY")
+    location = get_prop(event, "LOCATION")
+    description = get_prop(event, "DESCRIPTION")
 
-    status = fixture.get("status", {}) or {}
+    uid = stable_uid(event)
 
-    home_obj = teams.get("home", {}) or {}
-    away_obj = teams.get("away", {}) or {}
+    summary_cn = normalize_summary(summary)
+    location_cn = zh_text(ics_unescape(location))
 
-    home_name = zh_team(home_obj.get("name"))
-    away_name = zh_team(away_obj.get("name"))
+    desc_raw = ics_unescape(description)
+    desc_cn = zh_text(desc_raw)
 
-    start = dt_utc(fixture.get("date"))
-    if not start:
-        return None
-
-    end = start + timedelta(hours=2)
-
-    short_status = status.get("short") or "NS"
-    long_status = status.get("long") or ""
-    status_cn = zh_status(short_status, long_status)
-
-    home_goals = goals.get("home")
-    away_goals = goals.get("away")
-
-    finished = short_status in {"FT", "AET", "PEN"}
-
-    if finished and home_goals is not None and away_goals is not None:
-        summary = f"{TITLE_PREFIX}：{home_name} {home_goals}-{away_goals} {away_name}"
-    else:
-        summary = f"{TITLE_PREFIX}：{home_name} vs {away_name}"
-
-    venue = fixture.get("venue", {}) or {}
-    venue_name = zh_venue(venue.get("name"))
-    venue_city = venue.get("city") or ""
-
-    location_parts = [x for x in [venue_name, venue_city] if x]
-    location = "，".join(location_parts)
-
-    round_name = league.get("round") or "待定"
-
-    description_lines = [
-        "赛事：2026年美加墨世界杯",
-        f"阶段：{round_name}",
-        f"状态：{status_cn}",
-        f"主队：{home_name}",
-        f"客队：{away_name}",
-    ]
-
-    if location:
-        description_lines.append(f"球场：{location}")
-
-    if finished and home_goals is not None and away_goals is not None:
-        description_lines.append(f"比分：{home_name} {home_goals}-{away_goals} {away_name}")
-
-    penalty = score.get("penalty", {}) or {}
-    if isinstance(penalty, dict):
-        pen_home = penalty.get("home")
-        pen_away = penalty.get("away")
-        if pen_home is not None and pen_away is not None:
-            description_lines.append(f"点球：{home_name} {pen_home}-{pen_away} {away_name}")
-
-    description_lines.append(
-        "说明：本日历源每日北京时间9点自动更新；实际显示时间取决于你的日历客户端刷新频率。"
+    # 不直接照搬上游描述，避免广告、英文长说明、来源杂讯。
+    clean_description = "\n".join(
+        [
+            "赛事：2026年美加墨世界杯",
+            f"赛程：{summary_cn.replace(TITLE_PREFIX + '：', '')}",
+            f"球场：{location_cn}" if location_cn else "球场：待定",
+            "说明：本日历由公开赛程源自动同步并中文化；每天北京时间9点更新源文件，实际显示时间取决于你的日历客户端刷新频率。",
+        ]
     )
 
-    description = "\n".join(description_lines)
-    now = datetime.now(timezone.utc)
+    # 如果上游描述里有比分/状态等信息，也简单追加一行，方便后续赛果保留。
+    if desc_cn:
+        clean_description += f"\n上游信息：{desc_cn}"
 
-    return [
+    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    lines = [
         "BEGIN:VEVENT",
-        f"UID:{esc(stable_uid(fx))}",
-        f"DTSTAMP:{fmt_dt(now)}",
-        f"DTSTART:{fmt_dt(start)}",
-        f"DTEND:{fmt_dt(end)}",
-        f"SUMMARY:{esc(summary)}",
-        f"LOCATION:{esc(location)}",
-        f"DESCRIPTION:{esc(description)}",
-        "END:VEVENT",
+        f"UID:{ics_escape(uid)}",
+        f"DTSTAMP:{now}",
     ]
+
+    if dtstart:
+        lines.append(f"DTSTART:{dtstart}")
+
+    if dtend:
+        lines.append(f"DTEND:{dtend}")
+
+    lines.extend(
+        [
+            f"SUMMARY:{ics_escape(summary_cn)}",
+            f"LOCATION:{ics_escape(location_cn)}",
+            f"DESCRIPTION:{ics_escape(clean_description)}",
+            "END:VEVENT",
+        ]
+    )
+
+    return lines
 
 
 def build():
-    fixtures = fetch_fixtures()
+    if not UPSTREAM_ICS_URL:
+        raise RuntimeError("没有配置 UPSTREAM_ICS_URL。请在 GitHub Secrets 里添加上游 ICS 链接。")
 
-    events = []
-    for fx in fixtures:
-        event = event_from_fixture(fx)
-        if event:
-            events.extend(event)
+    print(f"开始抓取上游 ICS：{UPSTREAM_ICS_URL}")
 
-    calendar_lines = [
+    response = requests.get(
+        UPSTREAM_ICS_URL,
+        timeout=30,
+        headers={
+            "User-Agent": "Mozilla/5.0 WorldCupCNCalendar/1.0"
+        },
+    )
+    response.raise_for_status()
+
+    text = response.text
+
+    if "BEGIN:VCALENDAR" not in text:
+        raise RuntimeError("上游链接返回的不是 ICS 日历内容，请检查 UPSTREAM_ICS_URL。")
+
+    events = parse_ics_events(text)
+    print(f"上游事件数：{len(events)}")
+
+    output = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//WorldCup CN Calendar//ChatGPT MVP//ZH",
+        "PRODID:-//WorldCup CN Calendar//Public ICS Translator//ZH",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
-        f"X-WR-CALNAME:{esc(TITLE_PREFIX + '2026中文赛程赛果')}",
-        f"X-WR-TIMEZONE:{esc(TIMEZONE_NAME)}",
+        "X-WR-CALNAME:2026世界杯中文赛程赛果",
+        "X-WR-TIMEZONE:Asia/Shanghai",
         "REFRESH-INTERVAL;VALUE=DURATION:PT6H",
         "X-PUBLISHED-TTL:PT6H",
     ]
 
-    calendar_lines.extend(events)
-    calendar_lines.append("END:VCALENDAR")
+    for event in events:
+        output.extend(convert_event(event))
+
+    output.append("END:VCALENDAR")
 
     OUT.write_text(
-        "\r\n".join(fold(line) for line in calendar_lines) + "\r\n",
+        "\r\n".join(fold(line) for line in output) + "\r\n",
         encoding="utf-8",
     )
 
     print(f"生成完成：{OUT}")
-    print(f"事件数：{len(events) // 9}")
+    print(f"输出事件数：{len(events)}")
 
 
 if __name__ == "__main__":
