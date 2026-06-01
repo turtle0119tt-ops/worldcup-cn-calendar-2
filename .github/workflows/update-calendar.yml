@@ -1,0 +1,41 @@
+name: Update World Cup CN Calendar
+
+on:
+  schedule:
+    # 北京时间每天 09:00 = UTC 01:00
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-calendar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build calendar
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          python scripts/build_calendar.py
+
+      - name: Commit updated calendar
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add worldcup2026_cn.ics data/fixtures_cache.json
+          git commit -m "Update World Cup calendar" || echo "No changes to commit"
+          git push
