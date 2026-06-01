@@ -1,0 +1,16 @@
+[
+  {
+    "fixture": {"id": 1001, "date": "2026-06-11T19:00:00+00:00", "status": {"short": "NS", "long": "Not Started"}, "venue": {"name": "Estadio Azteca", "city": "Mexico City"}},
+    "league": {"round": "小组赛 第1轮"},
+    "teams": {"home": {"name": "Mexico"}, "away": {"name": "South Africa"}},
+    "goals": {"home": null, "away": null},
+    "score": {}
+  },
+  {
+    "fixture": {"id": 1002, "date": "2026-06-12T00:00:00+00:00", "status": {"short": "FT", "long": "Match Finished"}, "venue": {"name": "BMO Field", "city": "Toronto"}},
+    "league": {"round": "小组赛 第1轮"},
+    "teams": {"home": {"name": "Canada"}, "away": {"name": "Japan"}},
+    "goals": {"home": 1, "away": 1},
+    "score": {"penalty": {"home": null, "away": null}}
+  }
+]
