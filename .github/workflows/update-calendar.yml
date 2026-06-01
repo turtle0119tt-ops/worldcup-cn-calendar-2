@@ -28,7 +28,7 @@ jobs:
 
       - name: Build calendar
         env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          UPSTREAM_ICS_URL: ${{ secrets.UPSTREAM_ICS_URL }}
         run: |
           python scripts/build_calendar.py
 
