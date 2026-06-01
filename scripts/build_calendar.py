@@ -125,17 +125,19 @@ def event_from_fixture(fx):
     lines.append('说明：本日历源每日自动更新；实际显示时间取决于你的日历客户端刷新频率。')
     uid = stable_uid(fx)
     now = datetime.now(timezone.utc)
-    return [
-        'BEGIN:VEVENT',
-        f'UID:{esc(uid)}',
-        f'DTSTAMP:{fmt_dt(now)}',
-        f'DTSTART:{fmt_dt(start)}',
-        f'DTEND:{fmt_dt(end)}',
-        f'SUMMARY:{esc(summary)}',
-        f'LOCATION:{esc(location)}',
-        f'DESCRIPTION:{esc("\\n".join(lines))}',
-        'END:VEVENT'
-    ]
+description = "\n".join(lines)
+
+return [
+    'BEGIN:VEVENT',
+    f'UID:{esc(uid)}',
+    f'DTSTAMP:{fmt_dt(now)}',
+    f'DTSTART:{fmt_dt(start)}',
+    f'DTEND:{fmt_dt(end)}',
+    f'SUMMARY:{esc(summary)}',
+    f'LOCATION:{esc(location)}',
+    f'DESCRIPTION:{esc(description)}',
+    'END:VEVENT'
+]
 
 def build():
     fixtures = fetch_fixtures()
